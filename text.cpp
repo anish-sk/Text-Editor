@@ -15,7 +15,7 @@ using namespace std;
 
 #define EDITOR_VERSION "0.0.1"
 
-#define CTRL_KEY(k) ((k) & 0x1f) //Ctrl key combined with alphabetic keys map to bytes 1-26
+#define CTRL_KEY(k) ((k) & 0x1f) //Ctrl key combined with alphabetic keys map to the bytes 1-26
 
 enum editorKey{ //mapping of arrow keys
     ARROW_LEFT = 1000,
