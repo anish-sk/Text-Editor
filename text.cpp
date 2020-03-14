@@ -1,36 +1,62 @@
 /*** includes ***/
+
 #include<bits/stdc++.h>
 #include<ctype.h>
 #include<errno.h>
 #include<stdio.h>
 #include<stdlib.h>
+#include<sys/ioctl.h>
 #include<termios.h>
 #include<unistd.h>
 
 using namespace std;
 
+/*** defines ***/
+
+#define EDITOR_VERSION "0.0.1"
+
+#define CTRL_KEY(k) ((k) & 0x1f) //Ctrl key combined with alphabetic keys map to bytes 1-26
+
+enum editorKey{ //mapping of arrow keys
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN
+};
+
 /*** data ***/
-termios orig_termios;
+class editorConfig{
+    public:
+    int cx,cy; //cursor position
+    int screenrows; //screen height
+    int screencols; //screen width
+    termios orig_termios;
+};
+
+editorConfig E;
 
 /*** terminal ***/
+
 /*printing error message and exiting the program*/
 void die(const char *s){
+    write(STDOUT_FILENO, "\x1b[2J", 4); //clears the screen
+    write(STDOUT_FILENO, "\x1b[H",3); //repositions the cursor to the top left of the screen 
     perror(s);
     exit(1);
 }
 
 /*disabling raw mode*/
 void disableRawMode(){
-    if(tcsetattr(STDIN_FILENO,TCSAFLUSH, &orig_termios)==-1)
+    if(tcsetattr(STDIN_FILENO,TCSAFLUSH, &E.orig_termios)==-1)
     die("tcsetattr");
 }
 
 /*enabling raw mode*/
 void enableRawMode(){    
-    if(tcgetattr(STDIN_FILENO, &orig_termios)==-1) die("tcgetattr"); //reading the current attributes into a global class instance
+    if(tcgetattr(STDIN_FILENO, &E.orig_termios)==-1) die("tcgetattr"); //reading the current attributes into a global class instance
     atexit(disableRawMode); //we register our disableRawMode() function to be called automatically when the program exits.
 
-    termios raw = orig_termios; // we assign the original instance to another instance to make changes
+    termios raw = E.orig_termios; // we assign the original instance to another instance to make changes
     /*(IXON)Turning Ctrl-S and Ctrl-Q flags off
     Fixing Ctrl-M
     turning off some miscellaneous flags which are generally turned off by default*/
@@ -49,21 +75,170 @@ void enableRawMode(){
     if(tcsetattr(STDIN_FILENO,TCSAFLUSH, &raw)==-1) die("tcsetattr"); //passing the modified instance to wrtie the new terminal attributes back out
 }
 
-/*** init ***/
-int main(){
-    enableRawMode();
+/*returns a keypress*/
+int editorReadKey(){
+    int nread;
+    char c;
+    while((nread=read(STDIN_FILENO,&c,1))!=1){
+       if(nread==-1 && errno != EAGAIN) die("read"); 
+    }
 
+    if(c == '\x1b'){ //reading escape sequences as a single keypress
+        char seq[3];
+
+        if(read(STDOUT_FILENO,&seq[0],1)!=1) return '\x1b';
+        if(read(STDOUT_FILENO,&seq[1],1)!=1) return '\x1b';
+
+        if(seq[0]=='['){
+            switch(seq[1]){
+                case 'A': return ARROW_UP;
+                case 'B': return ARROW_DOWN;
+                case 'C': return ARROW_RIGHT;
+                case 'D': return ARROW_LEFT;
+            }
+        }
+        return '\x1b';
+    }
+    else{
+        return c;
+    }
     
-    while(1){
-        char c='\0';
-        if(read(STDIN_FILENO,&c,1)==-1 && errno!= EAGAIN) die("read");
-        if(iscntrl(c)){
-            printf("%d\r\n",c); //If 'c' is a nonprintable character, we print only the ASCII value
+}
+
+/* find cursor position */
+int getCursorPosition(int *rows, int *cols){
+    char buf[32];
+    unsigned int i = 0;
+
+    if(write(STDOUT_FILENO,"\x1b[6n",4)!=4) return -1; //n command gives the reply in the form of an escape sequence to the input
+    
+    while(i < sizeof(buf) - 1){ //read from stdin tilll we get R and put it into buf
+        if(read(STDIN_FILENO, &buf[i], 1)!=1) break;
+        if(buf[i] == 'R') break;
+        i++;
+    }
+    buf[i]='\0';
+
+    if(buf[0]!= '\x1b' || buf[1] != '[') return -1; // making sure the reply is an escape sequence
+    if(sscanf(&buf[2], "%d;%d",rows,cols)!=2) return -1; //setting rows and cols from the output of n command
+    
+    return 0;
+}
+
+/*get size of the terminal*/
+int getWindowSize(int *rows, int *cols){
+    winsize ws;
+    //ioctl places the number of columns wide and the number of rows high the terminal is into the winsize object
+    if(ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0){
+        //ioctl doesnt work on all systems
+        if(write(STDOUT_FILENO, "\x1b[999C\x1b[999B",12) != 12) return -1; //moving the cursor to the bottom right using B and C command
+        return getCursorPosition(rows,cols); //uses cursor position to find window size
+    }
+    else{
+        *cols = ws.ws_col; 
+        *rows = ws.ws_row;
+        return 0;
+    }
+}
+
+/*** output ***/
+
+/* drawing ~ */
+void editorDrawRows(string &ab){
+    int y;
+    for(y=0;y<E.screenrows;y++){
+        if(y == E.screenrows/3){
+            string welcome = "Text Editor -- version ";
+            welcome+=EDITOR_VERSION;
+            int welcomelen = welcome.size();
+            if(welcomelen > E.screencols) welcomelen = E.screencols;
+            int padding = (E.screencols - welcomelen)/2;
+            if(padding){
+                ab+="~";
+                padding--;
+            }
+            while(padding--){ab+=" ";} //centering the message
+            ab+=welcome.substr(0,welcomelen);
         }
         else{
-            printf("%d ('%c')\r\n",c,c); // If 'c' is printable we print the ASCII value as well as the character it represents
+            ab+="~";
         }
-        if(c=='q') break; //quit when you read 'q'
+
+        ab+="\x1b[K"; //clears the next line  
+        if(y < E.screenrows - 1)
+        {ab+="\r\n";} //we dont print a newline character in the last line
+    }
+}
+
+/* refreshing the screen */
+void editorRefreshScreen(){
+    string ab=""; //append buffer
+    ab+="\x1b[?25l"; //hides the cursor
+    ab+="\x1b[H"; //repositions the cursor to the top left of the screen using H command
+
+    editorDrawRows(ab);
+
+    ab+="\x1b["+to_string(E.cy+1)+";"+to_string(E.cx+1)+"H";  //repositions the cursor to its position
+    ab+="\x1b[?25h"; //shows the cursor
+    write(STDOUT_FILENO, ab.c_str(), ab.size()); //one single write is better than multiple writes to avoid flicker effects
+}
+
+/*** input ***/
+
+/* moves cursor according to key pressed */
+void editorMoveCursor(int key){
+    switch(key){
+        case ARROW_LEFT:
+            E.cx--;
+            break;
+        case ARROW_RIGHT:
+            E.cx++;
+            break;
+        case ARROW_UP:
+            E.cy--;
+            break;
+        case ARROW_DOWN:
+            E.cy++;
+            break;
+    }
+}
+
+/* handling a keypress */
+void editorProcessKeypress(){
+    int c = editorReadKey();
+
+    switch(c){
+        case CTRL_KEY('q'):
+        write(STDOUT_FILENO, "\x1b[2J", 4); //clears the screen
+        write(STDOUT_FILENO, "\x1b[H",3); //repositions the cursor to the top left of the screen 
+        exit(0); //quit when you read 'Ctrl-Q'
+        break;
+
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
+        editorMoveCursor(c);
+        break;
+    }
+}
+
+/*** init ***/
+
+/* initializes editor with window size*/
+void initEditor(){
+    E.cx = E.cy = 0;
+
+    if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
+}
+
+int main(){
+    enableRawMode();
+    initEditor();
+    
+    while(1){
+        editorRefreshScreen();
+        editorProcessKeypress();
     } 
     return 0;
 }
