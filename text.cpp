@@ -258,7 +258,10 @@ void editorProcessKeypress(){
         case END_KEY:
             E.cx = E.screencols - 1;
             break;
-
+        
+        case DEL_KEY:
+            break;
+        
         case PAGE_UP:
         case PAGE_DOWN:
             {
