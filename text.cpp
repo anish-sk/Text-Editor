@@ -14,7 +14,7 @@ using namespace std;
 
 /*** defines ***/
 
-#define EDITOR_VERSION "0.0.1"
+#define EDITOR_VERSION "0.01"
 
 #define CTRL_KEY(k) ((k) & 0x1f) //Ctrl key combined with alphabetic keys map to the bytes 1-26
 
