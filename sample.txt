@@ -1,0 +1,3 @@
+Congratulations on opening a file
+Oh you read the next line as well
+Now the third line comes

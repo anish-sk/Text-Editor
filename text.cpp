@@ -1,11 +1,16 @@
 /*** includes ***/
 
+#define _DEFAULT_SOURCE //feature test macros
+#define _BSD_SOURCE
+
 #include<bits/stdc++.h>
+#include<fstream>
 #include<ctype.h>
 #include<errno.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<sys/ioctl.h>
+#include<sys/types.h>
 #include<termios.h>
 #include<time.h>
 #include<unistd.h>
@@ -14,7 +19,7 @@ using namespace std;
 
 /*** defines ***/
 
-#define EDITOR_VERSION "0.01"
+#define EDITOR_VERSION "0.0.1"
 
 #define CTRL_KEY(k) ((k) & 0x1f) //Ctrl key combined with alphabetic keys map to the bytes 1-26
 
@@ -31,12 +36,28 @@ enum editorKey{ //mapping of arrow keys
 };
 
 /*** data ***/
+
+/* data type for storing  a row of text */
+typedef class erow{
+    int size;
+    char *chars;
+} erow;
+
+/*editor configuration */
 class editorConfig{
     public:
     int cx,cy; //cursor position
     int screenrows; //screen height
     int screencols; //screen width
+    int numrows;
+    vector<string> row;
     termios orig_termios;
+    // editorConfig(){
+    //     cx = cy = 0;
+    //     numrows = 0;
+    //     if(getWindowSize(&screenrows, &screencols) == -1) die("getWindowSize");
+    //     row = vector<string>();
+    // }
 };
 
 editorConfig E;
@@ -171,29 +192,62 @@ int getWindowSize(int *rows, int *cols){
     }
 }
 
+/*** row operations ***/
+
+/*add a row to the editor*/
+void editorAppendRow(string s, int len){
+    E.row.push_back(s.substr(0,len)); 
+    E.numrows++;
+}
+/*** file i/o ***/
+
+/*opening and reading a file from disk*/
+void editorOpen(char *filename){
+    ifstream fp(filename);
+    if(fp.fail()) die("fopen"); //open the file given by the user
+
+    string line;
+    getline(fp, line);
+    while(!fp.eof())
+        {
+            int linelen= line.size();
+            if(linelen= -1){
+                while(linelen > 0 && (line[linelen-1]=='\n' || line[linelen-1]=='\r')) 
+                    linelen--;
+            editorAppendRow(line, linelen);
+            getline(fp, line);
+        }
+    }
+    fp.close();
+}
 /*** output ***/
 
 /* drawing ~ */
 void editorDrawRows(string &ab){
     int y;
     for(y=0;y<E.screenrows;y++){
-        if(y == E.screenrows/3){
-            string welcome = "Text Editor -- version ";
-            welcome+=EDITOR_VERSION;
-            int welcomelen = welcome.size();
-            if(welcomelen > E.screencols) welcomelen = E.screencols;
-            int padding = (E.screencols - welcomelen)/2;
-            if(padding){
-                ab+="~";
-                padding--;
+        if(y >= E.numrows){
+            if(E.numrows == 0 && y == E.screenrows/3){
+                string welcome = "Text Editor -- version ";
+                welcome+=EDITOR_VERSION;
+                int welcomelen = welcome.size();
+                if(welcomelen > E.screencols) welcomelen = E.screencols;
+                int padding = (E.screencols - welcomelen)/2;
+                if(padding){
+                    ab+="~";
+                    padding--;
+                }
+                while(padding--){ab+=" ";} //centering the message
+                ab+=welcome.substr(0,welcomelen);
             }
-            while(padding--){ab+=" ";} //centering the message
-            ab+=welcome.substr(0,welcomelen);
+            else{
+                ab+="~";
+            }
         }
         else{
-            ab+="~";
+            int len = min((int)E.row[y].size(),E.screencols);
+            ab+=E.row[y].substr(0,len);
         }
-
         ab+="\x1b[K"; //clears the next line  
         if(y < E.screenrows - 1)
         {ab+="\r\n";} //we dont print a newline character in the last line
@@ -260,9 +314,6 @@ void editorProcessKeypress(){
             E.cx = E.screencols - 1;
             break;
         
-        case DEL_KEY:
-            break;
-        
         case PAGE_UP:
         case PAGE_DOWN:
             {
@@ -286,13 +337,18 @@ void editorProcessKeypress(){
 /* initializes editor with window size*/
 void initEditor(){
     E.cx = E.cy = 0;
-
+    E.numrows = 0;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
+    E.row = vector<string>();
 }
 
-int main(){
+int main(int argc, char *argv[]){
+
     enableRawMode();
     initEditor();
+    if(argc >= 2) {
+        editorOpen(argv[1]); //reading file given by user.
+    }
     
     while(1){
         editorRefreshScreen();
