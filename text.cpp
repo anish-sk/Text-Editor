@@ -47,6 +47,8 @@ typedef class erow{
 class editorConfig{
     public:
     int cx,cy; //cursor position
+    int rowoff; //row offset for vertical scrolling
+    int coloff; // column offset for horizontal scrolling
     int screenrows; //screen height
     int screencols; //screen width
     int numrows;
@@ -222,11 +224,28 @@ void editorOpen(char *filename){
 }
 /*** output ***/
 
+/*scrolling the editor*/
+void editorScroll(){
+    if(E.cy < E.rowoff){
+        E.rowoff = E.cy;
+    }
+    if(E.cy >= E.rowoff + E.screenrows){
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+    if(E.cx < E.coloff){
+        E.coloff = E.cx;
+    }
+    if(E.cx >= E.coloff + E.screencols){
+        E.coloff = E.cx - E.screencols + 1;
+    }
+}
+
 /* drawing ~ */
 void editorDrawRows(string &ab){
     int y;
     for(y=0;y<E.screenrows;y++){
-        if(y >= E.numrows){
+        int filerow = y + E.rowoff;
+        if(filerow >= E.numrows){
             if(E.numrows == 0 && y == E.screenrows/3){
                 string welcome = "Text Editor -- version ";
                 welcome+=EDITOR_VERSION;
@@ -245,8 +264,8 @@ void editorDrawRows(string &ab){
             }
         }
         else{
-            int len = min((int)E.row[y].size(),E.screencols);
-            ab+=E.row[y].substr(0,len);
+            int len = min(max((int)E.row[filerow].size()-E.coloff,0),E.screencols);
+            ab+=E.row[filerow].substr(E.coloff,len);
         }
         ab+="\x1b[K"; //clears the next line  
         if(y < E.screenrows - 1)
@@ -256,13 +275,15 @@ void editorDrawRows(string &ab){
 
 /* refreshing the screen */
 void editorRefreshScreen(){
+    editorScroll(); //calls the function to scroll the editor
+
     string ab=""; //append buffer
     ab+="\x1b[?25l"; //hides the cursor
     ab+="\x1b[H"; //repositions the cursor to the top left of the screen using H command
 
     editorDrawRows(ab);
 
-    ab+="\x1b["+to_string(E.cy+1)+";"+to_string(E.cx+1)+"H";  //repositions the cursor to its position
+    ab+="\x1b["+to_string(E.cy-E.rowoff+1)+";"+to_string(E.cx-E.coloff+1)+"H";  //repositions the cursor to its position along with scrolling
     ab+="\x1b[?25h"; //shows the cursor
     write(STDOUT_FILENO, ab.c_str(), ab.size()); //one single write is better than multiple writes to avoid flicker effects
 }
@@ -271,6 +292,7 @@ void editorRefreshScreen(){
 
 /* moves cursor according to key pressed */
 void editorMoveCursor(int key){
+    string row = (E.cy >= E.numrows) ? "" : E.row[E.cy]; 
     switch(key){
         case ARROW_LEFT:
             if(E.cx != 0){
@@ -278,7 +300,7 @@ void editorMoveCursor(int key){
             }            
             break;
         case ARROW_RIGHT:
-            if(E.cx != E.screencols - 1){
+            if(row!="" && (E.cx < (int)row.size())){ //preventing cursor to move past the line end
                 E.cx++;
             }
             break;
@@ -288,10 +310,14 @@ void editorMoveCursor(int key){
             }            
             break;
         case ARROW_DOWN:
-            if(E.cy != E.screenrows - 1){
+            if(E.cy < E.numrows){
                 E.cy++;
             }            
             break;
+    }
+    row = (E.cy >= E.numrows) ? "" : E.row[E.cy];
+    if(E.cx > row.size()){
+        E.cx = row.size(); //snapping cursor to end of line
     }
 }
 
@@ -337,6 +363,7 @@ void editorProcessKeypress(){
 /* initializes editor with window size*/
 void initEditor(){
     E.cx = E.cy = 0;
+    E.rowoff = E.coloff = 0;
     E.numrows = 0;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.row = vector<string>();
