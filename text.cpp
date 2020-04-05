@@ -7,6 +7,7 @@
 #include<fstream>
 #include<ctype.h>
 #include<errno.h>
+#include<stdarg.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<sys/ioctl.h>
@@ -20,6 +21,7 @@ using namespace std;
 /*** defines ***/
 
 #define EDITOR_VERSION "0.0.1"
+#define EDITOR_TAB_STOP 8
 
 #define CTRL_KEY(k) ((k) & 0x1f) //Ctrl key combined with alphabetic keys map to the bytes 1-26
 
@@ -47,12 +49,17 @@ typedef class erow{
 class editorConfig{
     public:
     int cx,cy; //cursor position
+    int rx; //horizontal coordinate for render string
     int rowoff; //row offset for vertical scrolling
     int coloff; // column offset for horizontal scrolling
     int screenrows; //screen height
     int screencols; //screen width
     int numrows;
     vector<string> row;
+    vector<string> render; //actual characters to print on the screen (for dealing with tabs and non printable characters)
+    string filename; //filename for displaying in status bar
+    char statusmsg[80]; //status message
+    time_t statusmsg_time; //time for which status message will be displayed
     termios orig_termios;
     // editorConfig(){
     //     cx = cy = 0;
@@ -101,7 +108,7 @@ void enableRawMode(){
     raw.c_cc[VMIN] = 0; //setting the minimum number of bytes of inout needed before read() can return
     raw.c_cc[VTIME] = 1; //setting the maximum amount of time to wait before read() returns
 
-    if(tcsetattr(STDIN_FILENO,TCSAFLUSH, &raw)==-1) die("tcsetattr"); //passing the modified instance to wrtie the new terminal attributes back out
+    if(tcsetattr(STDIN_FILENO,TCSAFLUSH, &raw)==-1) die("tcsetattr"); //passing the modified instance to write the new terminal attributes back out
 }
 
 /*returns a keypress*/
@@ -196,16 +203,48 @@ int getWindowSize(int *rows, int *cols){
 
 /*** row operations ***/
 
+/*convert row index to render index*/
+int editorRowCxtoRx(string &row, int cx){
+    int rx = 0;
+    for(int j=0; j<cx; j++){
+        if(row[j] == '\t')
+            rx += (EDITOR_TAB_STOP - 1) - (rx % EDITOR_TAB_STOP); //advance to the next tab stop
+        rx++;
+    }
+    return rx;
+}
+
+/*fill the render string using row*/
+string editorUpdateRow(string row){
+    string render="";
+    int idx=0;
+    for(auto i: row){
+        if(i=='\t'){
+            render+=' ';idx++;
+            while(idx % EDITOR_TAB_STOP != 0){//we advance till the next tab stop which is a column divisible by the tab_stop
+                render+=' ';idx++;
+            }
+        }
+        else{
+            render+=i; idx++;
+        }
+    }
+    return render;
+}
+
 /*add a row to the editor*/
 void editorAppendRow(string s, int len){
     E.row.push_back(s.substr(0,len)); 
+    E.render.push_back(editorUpdateRow(s.substr(0,len)));
     E.numrows++;
 }
+
 /*** file i/o ***/
 
 /*opening and reading a file from disk*/
 void editorOpen(char *filename){
     ifstream fp(filename);
+    E.filename = string(filename);
     if(fp.fail()) die("fopen"); //open the file given by the user
 
     string line;
@@ -226,17 +265,21 @@ void editorOpen(char *filename){
 
 /*scrolling the editor*/
 void editorScroll(){
+    E.rx = 0;
+    if(E.cy < E.numrows){
+        E.rx = editorRowCxtoRx(E.row[E.cy], E.cx);
+    }
     if(E.cy < E.rowoff){
         E.rowoff = E.cy;
     }
     if(E.cy >= E.rowoff + E.screenrows){
         E.rowoff = E.cy - E.screenrows + 1;
     }
-    if(E.cx < E.coloff){
-        E.coloff = E.cx;
+    if(E.rx < E.coloff){
+        E.coloff = E.rx;
     }
-    if(E.cx >= E.coloff + E.screencols){
-        E.coloff = E.cx - E.screencols + 1;
+    if(E.rx >= E.coloff + E.screencols){
+        E.coloff = E.rx - E.screencols + 1;
     }
 }
 
@@ -264,13 +307,47 @@ void editorDrawRows(string &ab){
             }
         }
         else{
-            int len = min(max((int)E.row[filerow].size()-E.coloff,0),E.screencols);
-            ab+=E.row[filerow].substr(E.coloff,len);
+            int len = (int)E.render[filerow].size()-E.coloff;
+            if(len < 0) len = 0;
+            if(len > E.screencols) len = E.screencols;
+            if(E.coloff >= E.render[filerow].size()) ;//ab+="";
+            else ab+=E.render[filerow].substr(E.coloff,len); //rendering considering the offset
         }
         ab+="\x1b[K"; //clears the next line  
-        if(y < E.screenrows - 1)
-        {ab+="\r\n";} //we dont print a newline character in the last line
+        ab+="\r\n"; //we dont print a newline character in the last line
     }
+}
+
+/* drawing status bar at the bottom */
+void editorDrawStatusBar(string &ab){
+    ab+="\x1b[7m"; //switch to inverted colours
+    string status;
+    if(E.filename == ""){
+        status+="[No Name]";
+    }
+    else{
+        status+=E.filename.substr(0,20); //adding filename to status
+        status+=" - " + to_string(E.numrows) + " lines"; //adding number of lines in file to status
+    }
+    ab+=status.substr(0,E.screencols); //cut the status string short in case it does not fit inside the width of the window
+    string rstatus=to_string(E.cy+1)+"/"+to_string(E.numrows); //showing current line number
+    for(int len= min(E.screencols,(int)status.size()); len < E.screencols; len++){
+        if(E.screencols - len == rstatus.size()){ //right aligning the current line number
+            ab+=rstatus;break;
+        }
+        ab+=" ";
+    }
+    ab+="\x1b[m"; //switch back to normal colours
+    ab+="\r\n";//line for status message
+}
+
+/* drawing message bar */
+void editorDrawMessageBar(string &ab){
+    ab+="\x1b[K"; //clear the message bar
+    int msglen = strlen(E.statusmsg);
+    if(msglen > E.screencols) msglen = E.screencols;
+    if(msglen && (time(NULL) - E.statusmsg_time < 5))
+        ab+=string(E.statusmsg).substr(0,msglen); //We will display the status message if it is less than 5 seconds old
 }
 
 /* refreshing the screen */
@@ -282,10 +359,22 @@ void editorRefreshScreen(){
     ab+="\x1b[H"; //repositions the cursor to the top left of the screen using H command
 
     editorDrawRows(ab);
+    editorDrawStatusBar(ab);
+    editorDrawMessageBar(ab);
 
-    ab+="\x1b["+to_string(E.cy-E.rowoff+1)+";"+to_string(E.cx-E.coloff+1)+"H";  //repositions the cursor to its position along with scrolling
+    ab+="\x1b["+to_string(E.cy-E.rowoff+1)+";"+to_string(E.rx-E.coloff+1)+"H";  //repositions the cursor to its position along with scrolling
     ab+="\x1b[?25h"; //shows the cursor
     write(STDOUT_FILENO, ab.c_str(), ab.size()); //one single write is better than multiple writes to avoid flicker effects
+}
+
+/*set status message*/
+void editorSetStatusMessage(const char *fmt, ...){
+    //this function takes a format string and a variable number of arguments, like the printf family ( a variadic function)
+    va_list ap;
+    va_start(ap, fmt); //The last argument before ... must be passed to va_start()
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap); //vsnprintf() reads the format string and calls va_arg() for each argument
+    va_end(ap);
+    E.statusmsg_time = time(NULL);
 }
 
 /*** input ***/
@@ -298,10 +387,18 @@ void editorMoveCursor(int key){
             if(E.cx != 0){
                 E.cx--;
             }            
+            else if(E.cy > 0){
+                E.cy--;
+                E.cx = E.row[E.cy].size(); // Allowing the user to press the left arrow key at the beginning of the line to move to the end of the previous line. 
+            }
             break;
         case ARROW_RIGHT:
             if(row!="" && (E.cx < (int)row.size())){ //preventing cursor to move past the line end
                 E.cx++;
+            }
+            else if(row!="" && E.cx == (int)row.size()){
+                E.cy++;
+                E.cx = 0; // Allowing the user to press the right key at the end of a line to go to the beginning of the next line.
             }
             break;
         case ARROW_UP:
@@ -322,6 +419,7 @@ void editorMoveCursor(int key){
 }
 
 /* handling a keypress */
+
 void editorProcessKeypress(){
     int c = editorReadKey();
 
@@ -337,12 +435,20 @@ void editorProcessKeypress(){
             break;
 
         case END_KEY:
-            E.cx = E.screencols - 1;
+            if(E.cy < E.numrows)
+                E.cx = E.row[E.cy].size();
             break;
         
         case PAGE_UP:
         case PAGE_DOWN:
             {
+                if(c == PAGE_UP){
+                    E.cy = E.rowoff;
+                }
+                else if(c == PAGE_DOWN){
+                    E.cy = E.rowoff + E.screenrows - 1;
+                    if(E.cy > E.numrows) E.cy = E.numrows;
+                }
                 int times = E.screenrows;
                 while(times--){
                     editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
@@ -363,10 +469,16 @@ void editorProcessKeypress(){
 /* initializes editor with window size*/
 void initEditor(){
     E.cx = E.cy = 0;
+    E.rx = 0;
     E.rowoff = E.coloff = 0;
     E.numrows = 0;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.row = vector<string>();
+    E.render = vector<string>();
+    E.screenrows -=2;
+    E.filename = "";
+    E.statusmsg[0] = '\0';
+    E.statusmsg_time = 0;
 }
 
 int main(int argc, char *argv[]){
@@ -377,6 +489,8 @@ int main(int argc, char *argv[]){
         editorOpen(argv[1]); //reading file given by user.
     }
     
+    editorSetStatusMessage("HELP: Ctrl-Q = quit");
+
     while(1){
         editorRefreshScreen();
         editorProcessKeypress();
