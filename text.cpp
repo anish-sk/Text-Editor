@@ -7,6 +7,7 @@
 #include<fstream>
 #include<ctype.h>
 #include<errno.h>
+#include<fcntl.h>
 #include<stdarg.h>
 #include<stdio.h>
 #include<stdlib.h>
@@ -22,10 +23,12 @@ using namespace std;
 
 #define EDITOR_VERSION "0.0.1"
 #define EDITOR_TAB_STOP 8
+#define EDITOR_QUIT_TIMES 3
 
 #define CTRL_KEY(k) ((k) & 0x1f) //Ctrl key combined with alphabetic keys map to the bytes 1-26
 
 enum editorKey{ //mapping of arrow keys
+    BACKSPACE = 127,
     ARROW_LEFT = 1000,
     ARROW_RIGHT,
     ARROW_UP,
@@ -54,9 +57,10 @@ class editorConfig{
     int coloff; // column offset for horizontal scrolling
     int screenrows; //screen height
     int screencols; //screen width
-    int numrows;
-    vector<string> row;
+    int numrows; //number of rows in the file
+    vector<string> row; //stores the rows of the file
     vector<string> render; //actual characters to print on the screen (for dealing with tabs and non printable characters)
+    int dirty; //indicates whether the file has unsaved changes or not
     string filename; //filename for displaying in status bar
     char statusmsg[80]; //status message
     time_t statusmsg_time; //time for which status message will be displayed
@@ -70,6 +74,10 @@ class editorConfig{
 };
 
 editorConfig E;
+
+/** prototypes ***/
+
+void editorSetStatusMessage(const char *fmt, ...);
 
 /*** terminal ***/
 
@@ -237,9 +245,56 @@ void editorAppendRow(string s, int len){
     E.row.push_back(s.substr(0,len)); 
     E.render.push_back(editorUpdateRow(s.substr(0,len)));
     E.numrows++;
+    E.dirty++;
+}
+
+/* insert a character into row*/
+void editorRowInsertChar(string &row, int at, char c, int pos){
+    if(at < 0 || at > row.size()){
+        at = row.size();
+    }
+    row.insert(row.begin()+at,c);
+    E.render[pos] = editorUpdateRow(row);
+    E.dirty++;
+}
+
+/* delete a character from row*/
+void editorRowDelChar(string &row, int at, int pos){
+    if(at < 0 || at >= row.size()) return;
+    row.erase(row.begin()+at);
+    E.render[pos] = editorUpdateRow(row);
+    E.dirty++;
+}
+
+/*** editor operations***/
+
+/* insert a character in the current position */
+void editorInsertChar(char c){
+    if(E.cy == E.numrows){
+        editorAppendRow("",0); //If the cursor is at the end we insert an empty row
+    }
+    editorRowInsertChar(E.row[E.cy], E.cx, c, E.cy);
+    E.cx++;
+}
+
+/*deletes a character from the current position */
+void editorDelChar(){
+    if(E.cy == E.numrows) return;
+    if(E.cx > 0){
+        editorRowDelChar(E.row[E.cy], E.cx-1, E.cy);
+        E.cx--;
+    }
 }
 
 /*** file i/o ***/
+
+/* concatenating the rows of the file into a single string */
+void editorRowsToString(string &buf){
+    for(int j=0;j<E.numrows; j++){
+        buf+=E.row[j];
+        buf+='\n';
+    }
+} 
 
 /*opening and reading a file from disk*/
 void editorOpen(char *filename){
@@ -260,7 +315,31 @@ void editorOpen(char *filename){
         }
     }
     fp.close();
+    E.dirty = 0;
 }
+
+/* saving the file */
+void editorSave(){
+    if(E.filename == "") return;
+
+    string buf="";
+    editorRowsToString(buf);
+
+    int fd = open(E.filename.c_str(),O_RDWR | O_CREAT, 0644); //opening the file 
+    if(fd != -1){
+        if(ftruncate(fd, buf.size())!=-1){ //truncating the file to the give length
+            if(write(fd, buf.c_str(), buf.size())== buf.size()){
+                close(fd);
+                E.dirty = 0;
+                editorSetStatusMessage("%d bytes written to disk", buf.size());
+                return;
+            }
+        }
+        close(fd);
+    }
+    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+}
+
 /*** output ***/
 
 /*scrolling the editor*/
@@ -328,6 +407,7 @@ void editorDrawStatusBar(string &ab){
     else{
         status+=E.filename.substr(0,20); //adding filename to status
         status+=" - " + to_string(E.numrows) + " lines"; //adding number of lines in file to status
+        status+= E.dirty?"(modified)" : "";
     }
     ab+=status.substr(0,E.screencols); //cut the status string short in case it does not fit inside the width of the window
     string rstatus=to_string(E.cy+1)+"/"+to_string(E.numrows); //showing current line number
@@ -421,13 +501,28 @@ void editorMoveCursor(int key){
 /* handling a keypress */
 
 void editorProcessKeypress(){
+    static int quit_times = EDITOR_QUIT_TIMES;
+
     int c = editorReadKey();
 
     switch(c){
+        case '\r':
+            break;
+
         case CTRL_KEY('q'):
+            if(E.dirty && quit_times > 0){
+                editorSetStatusMessage("WARNING!!! File has unsaved changes. Press Ctrl-Q %d more times to quit.", quit_times);
+                //warning the user of unsaved changes before quitting the editor
+                quit_times -- ;
+                return;
+            }
             write(STDOUT_FILENO, "\x1b[2J", 4); //clears the screen
             write(STDOUT_FILENO, "\x1b[H",3); //repositions the cursor to the top left of the screen 
             exit(0); //quit when you read 'Ctrl-Q'
+            break;
+
+        case CTRL_KEY('s'):
+            editorSave(); //Ctrl-S for save
             break;
 
         case HOME_KEY:
@@ -438,7 +533,14 @@ void editorProcessKeypress(){
             if(E.cy < E.numrows)
                 E.cx = E.row[E.cy].size();
             break;
-        
+            
+        case BACKSPACE:
+        case CTRL_KEY('h'):
+        case DEL_KEY:
+            if(c == DEL_KEY) editorMoveCursor(ARROW_RIGHT);
+            editorDelChar();
+            break;
+
         case PAGE_UP:
         case PAGE_DOWN:
             {
@@ -455,13 +557,23 @@ void editorProcessKeypress(){
                 }
             }
             break;
+
         case ARROW_UP:
         case ARROW_DOWN:
         case ARROW_LEFT:
         case ARROW_RIGHT:
-        editorMoveCursor(c);
-        break;
+            editorMoveCursor(c);
+            break;
+        
+        case CTRL_KEY('l'):
+        case '\x1b':
+            break;
+        
+        default:
+            editorInsertChar(c);
+            break;
     }
+    quit_times = EDITOR_QUIT_TIMES;
 }
 
 /*** init ***/
@@ -475,6 +587,7 @@ void initEditor(){
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.row = vector<string>();
     E.render = vector<string>();
+    E.dirty = 0;
     E.screenrows -=2;
     E.filename = "";
     E.statusmsg[0] = '\0';
@@ -489,7 +602,7 @@ int main(int argc, char *argv[]){
         editorOpen(argv[1]); //reading file given by user.
     }
     
-    editorSetStatusMessage("HELP: Ctrl-Q = quit");
+    editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
 
     while(1){
         editorRefreshScreen();
