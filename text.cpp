@@ -240,11 +240,26 @@ string editorUpdateRow(string row){
     return render;
 }
 
-/*add a row to the editor*/
-void editorAppendRow(string s, int len){
-    E.row.push_back(s.substr(0,len)); 
-    E.render.push_back(editorUpdateRow(s.substr(0,len)));
+/*insert a row into the editor*/
+void editorInsertRow(int at, string s, int len){
+    if(at == E.row.size()){
+        E.row.push_back(s.substr(0,len)); 
+        E.render.push_back(editorUpdateRow(s.substr(0,len)));
+    }
+    else{
+        E.row.insert(E.row.begin()+at,s.substr(0,len)); 
+        E.render.insert(E.render.begin()+at,editorUpdateRow(s.substr(0,len)));
+    }
     E.numrows++;
+    E.dirty++;
+}
+
+/* deleting a row */
+void editorDelRow(int at){
+    if(at < 0 || at >= E.numrows) return;
+    E.row.erase(E.row.begin()+at);
+    E.render.erase(E.render.begin()+at);
+    E.numrows--;
     E.dirty++;
 }
 
@@ -254,6 +269,13 @@ void editorRowInsertChar(string &row, int at, char c, int pos){
         at = row.size();
     }
     row.insert(row.begin()+at,c);
+    E.render[pos] = editorUpdateRow(row);
+    E.dirty++;
+}
+
+/* Appending one row to another */
+void editorRowAppendString(string &row, string to_append, int pos){
+    row+=to_append;
     E.render[pos] = editorUpdateRow(row);
     E.dirty++;
 }
@@ -271,18 +293,40 @@ void editorRowDelChar(string &row, int at, int pos){
 /* insert a character in the current position */
 void editorInsertChar(char c){
     if(E.cy == E.numrows){
-        editorAppendRow("",0); //If the cursor is at the end we insert an empty row
+        editorInsertRow(E.numrows,"",0); //If the cursor is at the end we insert an empty row
     }
     editorRowInsertChar(E.row[E.cy], E.cx, c, E.cy);
     E.cx++;
 }
 
+/* insert newline when Enter key is pressed*/
+void editorInsertNewline(){
+    if(E.cx == 0){
+        editorInsertRow(E.cy,"",0);//If we are at the beginnig of a line , we just need to insert a blank row above
+    }
+    else{
+        string row = E.row[E.cy];
+        editorInsertRow(E.cy+1,row.substr(E.cx),row.size()-E.cx); //We insert the characters that are to the right of the cursor
+        E.row[E.cy].erase(E.cx); //We truncate the current row;
+        row = E.row[E.cy];
+        E.render[E.cy]= editorUpdateRow(row);
+    }
+    E.cy++;
+    E.cx=0;
+}
+
 /*deletes a character from the current position */
 void editorDelChar(){
     if(E.cy == E.numrows) return;
+    if(E.cx == 0 && E.cy == 0) return;
     if(E.cx > 0){
         editorRowDelChar(E.row[E.cy], E.cx-1, E.cy);
         E.cx--;
+    }else{
+        E.cx = E.row[E.cy-1].size(); //Pressing backspace from the beginning of a line.
+        editorRowAppendString(E.row[E.cy-1], E.row[E.cy],E.cy-1); //We append the current row too the previous row
+        editorDelRow(E.cy); //The current row is deleted
+        E.cy--;
     }
 }
 
@@ -310,7 +354,7 @@ void editorOpen(char *filename){
             if(linelen= -1){
                 while(linelen > 0 && (line[linelen-1]=='\n' || line[linelen-1]=='\r')) 
                     linelen--;
-            editorAppendRow(line, linelen);
+            editorInsertRow(E.numrows,line, linelen);
             getline(fp, line);
         }
     }
@@ -507,6 +551,7 @@ void editorProcessKeypress(){
 
     switch(c){
         case '\r':
+            editorInsertNewline();
             break;
 
         case CTRL_KEY('q'):
