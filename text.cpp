@@ -78,6 +78,8 @@ editorConfig E;
 /** prototypes ***/
 
 void editorSetStatusMessage(const char *fmt, ...);
+void editorRefreshScreen();
+char *editorPrompt(const char *prompt);
 
 /*** terminal ***/
 
@@ -364,7 +366,13 @@ void editorOpen(char *filename){
 
 /* saving the file */
 void editorSave(){
-    if(E.filename == "") return;
+    if(E.filename == ""){
+        E.filename = string(editorPrompt("Save as: %s (ESC to cancel)"));
+        if(E.filename == ""){
+            editorSetStatusMessage("Save aborted");
+            return;
+        }
+    } 
 
     string buf="";
     editorRowsToString(buf);
@@ -502,6 +510,44 @@ void editorSetStatusMessage(const char *fmt, ...){
 }
 
 /*** input ***/
+
+/* prompting the user to input a filename when saving a new file*/
+char *editorPrompt(const char *prompt){
+    size_t bufsize = 128;
+    char *buf = (char *)malloc(bufsize);
+
+    size_t buflen = 0;
+    buf[0] = '\0';
+
+    while(1){
+        editorSetStatusMessage(prompt, buf);
+        editorRefreshScreen();
+        
+        int c = editorReadKey();
+        if(c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE){
+            if(buflen!=0) buf[--buflen]='\0';
+        }
+        else if(c=='\x1b'){
+            editorSetStatusMessage("");
+            free(buf);
+            return NULL; //the input prompt is cancelled when user presses escape
+        }
+        else if(c=='\r'){
+            if(buflen!=0){
+                editorSetStatusMessage("");//when the user presses enter the status message is cleared and user's input is returned. 
+                return buf;
+            }
+        }
+        else if(!iscntrl(c) && c < 128 ){//checking if input key is in range of char
+            if(buflen == bufsize - 1){
+                bufsize *= 2;
+                buf = (char *)realloc(buf, bufsize); //when we reach maximum capacity we reallocate memory
+            }
+            buf[buflen++]=c;
+            buf[buflen]='\0';
+        }
+    }
+}
 
 /* moves cursor according to key pressed */
 void editorMoveCursor(int key){
