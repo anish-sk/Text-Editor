@@ -79,7 +79,7 @@ editorConfig E;
 
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
-char *editorPrompt(const char *prompt);
+char *editorPrompt(const char *prompt, void (*callback)(char *, int));
 
 /*** terminal ***/
 
@@ -222,6 +222,20 @@ int editorRowCxtoRx(string &row, int cx){
         rx++;
     }
     return rx;
+}
+
+/*convert render index to row index (essential inversion of the function editorRowCxtoRx*/
+int editorRowRxtoCx(string &row, int rx){
+    int cur_rx = 0;
+    int cx;
+    for(cx=0; cx<row.size(); cx++){
+        if(row[cx]=='\t')
+            cur_rx+= (EDITOR_TAB_STOP - 1) - (cur_rx % EDITOR_TAB_STOP);
+        cur_rx++;
+
+        if(cur_rx > rx) return cx;
+    }
+    return cx;
 }
 
 /*fill the render string using row*/
@@ -367,7 +381,7 @@ void editorOpen(char *filename){
 /* saving the file */
 void editorSave(){
     if(E.filename == ""){
-        E.filename = string(editorPrompt("Save as: %s (ESC to cancel)"));
+        E.filename = string(editorPrompt("Save as: %s (ESC to cancel)", NULL));
         if(E.filename == ""){
             editorSetStatusMessage("Save aborted");
             return;
@@ -390,6 +404,67 @@ void editorSave(){
         close(fd);
     }
     editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+}
+
+/*** find ***/
+
+/*finding a given string*/
+void editorFindCallback(char *query, int key){
+    static int last_match = -1;
+    static int direction = 1; //variable containing direction to search
+    if(key == '\r' || key == '\x1b'){
+        last_match = -1;
+        direction = 1;
+        return; //return from search when user presses enter or escape
+    }
+    else if(key == ARROW_RIGHT || key == ARROW_DOWN){
+        direction = 1; //forward search
+    }
+    else if(key == ARROW_LEFT || key == ARROW_UP){
+        direction = -1; //backward search
+    }
+    else {
+        last_match = -1;
+        direction = 1;
+    }
+
+    if(last_match == -1) direction = 1;
+    int current = last_match;
+    int i;
+    for(int i=0;i<E.numrows;i++){
+        current += direction; //calculating the row number to be searched for
+        if(current == -1) current = E.numrows - 1; //wrap around from beginning to end
+        else if(current == E.numrows) current = 0; //wrap around from end to beginning
+
+        size_t match = E.render[current].find(query);
+        if(match != string::npos){
+            last_match = current;
+            E.cy = current;
+            E.cx =  editorRowRxtoCx(E.row[current],(int)match); //move the cursor to the match
+            E.rowoff = E.numrows; //we scroll to the bottom of the file so that in the next refresh the match apears at top.
+            break;
+        }
+    }
+}
+
+/*wrapper function for find in incremental search*/
+void editorFind(){
+    int saved_cx = E.cx; //save cursor position
+    int saved_cy = E.cy;
+    int saved_coloff = E.coloff;
+    int saved_rowoff = E.rowoff;
+
+    char *query = editorPrompt("Search: %s (ESC/Arrows/Enter)", editorFindCallback); //get the string to be searched for from prompt
+
+    if(query){
+        free(query);
+    }
+    else{
+        E.cx = saved_cx;//When the user pressed escape we restore the cursor to values before search
+        E.cy = saved_cy;
+        E.coloff = saved_coloff;
+        E.rowoff = saved_rowoff;
+    }
 }
 
 /*** output ***/
@@ -512,7 +587,7 @@ void editorSetStatusMessage(const char *fmt, ...){
 /*** input ***/
 
 /* prompting the user to input a filename when saving a new file*/
-char *editorPrompt(const char *prompt){
+char *editorPrompt(const char *prompt, void(*callback)(char *, int)){
     size_t bufsize = 128;
     char *buf = (char *)malloc(bufsize);
 
@@ -529,12 +604,14 @@ char *editorPrompt(const char *prompt){
         }
         else if(c=='\x1b'){
             editorSetStatusMessage("");
+            if(callback) callback(buf, c);
             free(buf);
             return NULL; //the input prompt is cancelled when user presses escape
         }
         else if(c=='\r'){
             if(buflen!=0){
                 editorSetStatusMessage("");//when the user presses enter the status message is cleared and user's input is returned. 
+                if(callback) callback(buf, c);
                 return buf;
             }
         }
@@ -546,6 +623,7 @@ char *editorPrompt(const char *prompt){
             buf[buflen++]=c;
             buf[buflen]='\0';
         }
+        if(callback) callback(buf, c);
     }
 }
 
@@ -624,7 +702,11 @@ void editorProcessKeypress(){
             if(E.cy < E.numrows)
                 E.cx = E.row[E.cy].size();
             break;
-            
+
+        case CTRL_KEY('f'):
+            editorFind();
+            break;
+
         case BACKSPACE:
         case CTRL_KEY('h'):
         case DEL_KEY:
@@ -693,7 +775,7 @@ int main(int argc, char *argv[]){
         editorOpen(argv[1]); //reading file given by user.
     }
     
-    editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
+    editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
 
     while(1){
         editorRefreshScreen();
