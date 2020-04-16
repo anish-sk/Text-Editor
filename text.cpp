@@ -27,6 +27,8 @@ using namespace std;
 
 #define CTRL_KEY(k) ((k) & 0x1f) //Ctrl key combined with alphabetic keys map to the bytes 1-26
 
+typedef std::basic_string<unsigned char> ustring;
+
 enum editorKey{ //mapping of arrow keys
     BACKSPACE = 127,
     ARROW_LEFT = 1000,
@@ -38,6 +40,11 @@ enum editorKey{ //mapping of arrow keys
     END_KEY,
     PAGE_UP,
     PAGE_DOWN
+};
+
+enum editorHighlight{
+    HL_NORMAL = 0,
+    HL_NUMBER
 };
 
 /*** data ***/
@@ -60,6 +67,7 @@ class editorConfig{
     int numrows; //number of rows in the file
     vector<string> row; //stores the rows of the file
     vector<string> render; //actual characters to print on the screen (for dealing with tabs and non printable characters)
+    vector<ustring> hl; //Each value corresponds to a character in render and indicates the type of highlight
     int dirty; //indicates whether the file has unsaved changes or not
     string filename; //filename for displaying in status bar
     char statusmsg[80]; //status message
@@ -211,6 +219,30 @@ int getWindowSize(int *rows, int *cols){
     }
 }
 
+/*** syntax highlighting ***/
+
+/*updating the hl array for highlighting*/
+ustring editorUpdateSyntax(string render){
+    int i;
+    ustring h = ustring();
+    for(i=0;i < render.size();i++){
+        if(isdigit(render[i])){
+            h+= HL_NUMBER; //for digits hl value is HL_NUMBER
+        }
+        else{
+            h+= HL_NORMAL;
+        }
+    }
+    return h;
+}
+
+int editorSyntaxToColor(int hl){
+    switch(hl){
+        case HL_NUMBER: return 31;
+        default: return 37;
+    }
+}
+
 /*** row operations ***/
 
 /*convert row index to render index*/
@@ -261,10 +293,13 @@ void editorInsertRow(int at, string s, int len){
     if(at == E.row.size()){
         E.row.push_back(s.substr(0,len)); 
         E.render.push_back(editorUpdateRow(s.substr(0,len)));
+        E.hl.push_back(editorUpdateSyntax(E.render.back()));
     }
     else{
-        E.row.insert(E.row.begin()+at,s.substr(0,len)); 
-        E.render.insert(E.render.begin()+at,editorUpdateRow(s.substr(0,len)));
+        E.row.insert(E.row.begin()+at,s.substr(0,len));
+        string r = editorUpdateRow(s.substr(0,len)); 
+        E.render.insert(E.render.begin()+at,r);
+        E.hl.insert(E.hl.begin()+at,editorUpdateSyntax(r));
     }
     E.numrows++;
     E.dirty++;
@@ -286,6 +321,7 @@ void editorRowInsertChar(string &row, int at, char c, int pos){
     }
     row.insert(row.begin()+at,c);
     E.render[pos] = editorUpdateRow(row);
+    E.hl[pos] = editorUpdateSyntax(E.render[pos]);
     E.dirty++;
 }
 
@@ -293,6 +329,7 @@ void editorRowInsertChar(string &row, int at, char c, int pos){
 void editorRowAppendString(string &row, string to_append, int pos){
     row+=to_append;
     E.render[pos] = editorUpdateRow(row);
+    E.hl[pos] = editorUpdateSyntax(E.render[pos]);
     E.dirty++;
 }
 
@@ -301,6 +338,7 @@ void editorRowDelChar(string &row, int at, int pos){
     if(at < 0 || at >= row.size()) return;
     row.erase(row.begin()+at);
     E.render[pos] = editorUpdateRow(row);
+    E.hl[pos] = editorUpdateSyntax(E.render[pos]);
     E.dirty++;
 }
 
@@ -326,6 +364,7 @@ void editorInsertNewline(){
         E.row[E.cy].erase(E.cx); //We truncate the current row;
         row = E.row[E.cy];
         E.render[E.cy]= editorUpdateRow(row);
+        E.hl[E.cy]=editorUpdateSyntax(E.render[E.cy]);
     }
     E.cy++;
     E.cx=0;
@@ -516,8 +555,32 @@ void editorDrawRows(string &ab){
             int len = (int)E.render[filerow].size()-E.coloff;
             if(len < 0) len = 0;
             if(len > E.screencols) len = E.screencols;
-            if(E.coloff >= E.render[filerow].size()) ;//ab+="";
-            else ab+=E.render[filerow].substr(E.coloff,len); //rendering considering the offset
+            string s="";
+            ustring h=ustring();
+            if(E.coloff<E.render[filerow].size()){
+                s = E.render[filerow].substr(E.coloff);//rendering considering the offset.
+                h = E.hl[filerow].substr(E.coloff); ///for rendering highlights.
+            }
+            int current_color = -1;
+            int j;
+            for(j=0;j<len && s.size();j++){
+                if(h[j] == HL_NORMAL){
+                    if(current_color!=-1){
+                        ab+="\x1b[39m"; //redering normal characters in default color.
+                        current_color=-1;
+                    }
+                    ab+=s[j];
+                }
+                else{
+                    int color = editorSyntaxToColor(h[j]);
+                    if(color!=current_color){
+                        current_color = color;                        
+                        ab+="\x1b["+to_string(color)+"m"; //change to the required color
+                    }
+                    ab+=s[j];
+                }
+            }
+            ab+="\x1b[39m"; //changing back to default color
         }
         ab+="\x1b[K"; //clears the next line  
         ab+="\r\n"; //we dont print a newline character in the last line
