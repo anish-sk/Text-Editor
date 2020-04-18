@@ -8,6 +8,7 @@
 #include<ctype.h>
 #include<errno.h>
 #include<fcntl.h>
+#include<filesystem>
 #include<stdarg.h>
 #include<stdio.h>
 #include<stdlib.h>
@@ -44,10 +45,36 @@ enum editorKey{ //mapping of arrow keys
 
 enum editorHighlight{
     HL_NORMAL = 0,
-    HL_NUMBER
+    HL_COMMENT,
+    HL_KEYWORD1,
+    HL_KEYWORD2,
+    HL_STRING,
+    HL_NUMBER,
+    HL_MATCH
 };
 
+#define HL_HIGHLIGHT_NUMBERS (1<<0) //flag for enabling the numbers highlighting
+#define HL_HIGHLIGHT_STRINGS (1<<1) //flag for enabling the strings highlighting
+
 /*** data ***/
+
+/*syntax highlighting information for the file*/
+class editorSyntax{
+    public:
+    string filetype; //filetype displayed to the user
+    vector<string> filematch; //list of strings where each string contains a pattern for the filename to match against
+    vector<string> keywords; //list of keywords;
+    string singleline_comment_start; // single-line comment pattern
+    int flags; //bit field which contains flags for whether to highlight numbers and strings.
+    editorSyntax(string filetype, vector<string> filematch, vector<string> keywords, string singleline_comment_start, int flags){
+        this->filetype = filetype;
+        this->filematch = filematch;
+        this->keywords = keywords;
+        this->singleline_comment_start = singleline_comment_start;
+        this->flags = flags;
+    }
+    
+};
 
 /* data type for storing  a row of text */
 typedef class erow{
@@ -72,6 +99,7 @@ class editorConfig{
     string filename; //filename for displaying in status bar
     char statusmsg[80]; //status message
     time_t statusmsg_time; //time for which status message will be displayed
+    editorSyntax *syntax; //syntax information for the current file
     termios orig_termios;
     // editorConfig(){
     //     cx = cy = 0;
@@ -83,7 +111,20 @@ class editorConfig{
 
 editorConfig E;
 
-/** prototypes ***/
+/*** filetypes ***/
+
+vector<string> C_HL_extensions = {".c",".h",".cpp"}; //list of extensions for C/C++ type files
+vector<string> C_HL_keywords ={
+    "switch", "if", "while", "for", "break", "continue", "return", "else", "struct", "union", "typedef", "static", "enum", "class","case",
+
+    "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "string|", "vector|", "string|", "set|", "unordered_map|", "unordered_set|", "greater|", "pair|" 
+};//set of keywords and common data types(terminated by a pipe)
+
+vector<editorSyntax> HLDB = {editorSyntax("c",C_HL_extensions,C_HL_keywords,"//",HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS)}; //highlight database
+
+#define HLDB_ENTRIES HLDB.size()
+
+/*** prototypes ***/
 
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
@@ -221,26 +262,140 @@ int getWindowSize(int *rows, int *cols){
 
 /*** syntax highlighting ***/
 
+/*returns whethere a character is a separator character*/
+int is_separator(int c){
+    return isspace(c) || c =='\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+}
+
 /*updating the hl array for highlighting*/
 ustring editorUpdateSyntax(string render){
-    int i;
-    ustring h = ustring();
-    for(i=0;i < render.size();i++){
-        if(isdigit(render[i])){
-            h+= HL_NUMBER; //for digits hl value is HL_NUMBER
+    ustring h = ustring(render.size(),HL_NORMAL);
+    if(E.syntax == NULL) return h;
+
+    vector<string> keywords = E.syntax->keywords;
+
+    string scs = E.syntax->singleline_comment_start;//start of single line comment
+    int scs_len = scs.size(); 
+
+    int prev_sep = 1; //keeps track of whether the previous character was a separator
+    int in_string = 0; //keeps track of whether we are inside a string or not and also stores the beginning quote
+    
+    int i=0;
+    while(i<render.size()){
+        char c = render[i];
+        unsigned char prev_hl = (i>0) ? h[i-1]: HL_NORMAL; //highlight type of the previous character
+
+        if(scs_len && !in_string){
+            if(render.substr(i,scs_len)==scs){//if the current charcter is the start of a single line comment
+                for(int j=i;j<=render.size();j++){
+                    h[j]=HL_COMMENT; //we set the rest of the line with HL_COMMENT
+                }
+                return h;
+            }
         }
-        else{
-            h+= HL_NORMAL;
+
+        if(E.syntax->flags & HL_HIGHLIGHT_STRINGS){//highlight strings enabled
+            if(in_string){
+                h[i] = HL_STRING;
+                if(c=='\\' && i+1<render.size()){
+                    h[i+1]=HL_STRING;//taking escaped quotes into consideration
+                    i+=2;
+                    continue;
+                }
+                if(c == in_string) in_string=0; //we encounter the end quote, then we reset in_string
+                i++;
+                prev_sep = 1;
+                continue;
+            }
+            else{
+                if(c=='"' || c=='\''){
+                    in_string = c; //we set in_string when we encounter a beginning quote
+                    h[i]=HL_STRING;
+                    i++;
+                    continue;
+                }
+            }
         }
+
+        if(E.syntax->flags & HL_HIGHLIGHT_NUMBERS){ //highlight numbers enabled
+            if((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c=='.' && prev_hl == HL_NUMBER)){
+                //a digit is highlighted if either previous character is a separator or is also highlighted with HL_NUMBER or a decimal point 
+                h[i] = HL_NUMBER; //for digits hl value is HL_NUMBER
+                i++;
+                prev_sep = 0;
+                continue;
+            }
+        }
+
+        if(prev_sep){
+            int j;
+            for(j=0; j<keywords.size(); j++){
+                int klen = keywords[j].size();
+                bool kw2 = keywords[j][klen-1] == '|'; //check for datatype
+                string key = keywords[j];
+                int hi = kw2?HL_KEYWORD2:HL_KEYWORD1;//highlight to be set
+                if(kw2) {klen--;key.pop_back();}
+
+                if((render.substr(i,klen)== key)&&((i+klen == render.size())|| is_separator(render[i+klen]))){ //the current character is the start of a keyword
+                    for(int j=i;j<i+klen;j++){
+                        h[j]=hi;
+                    }
+                    i+=klen;
+                    break;
+                }
+            }
+            if(j!=keywords.size()){
+                prev_sep = 0;
+                continue; 
+            }
+
+        }
+
+        prev_sep = is_separator(c);
+        i++;
     }
     return h;
 }
 
 int editorSyntaxToColor(int hl){
     switch(hl){
-        case HL_NUMBER: return 31;
+        case HL_COMMENT: return 36; //cyan for single line comments
+        case HL_KEYWORD1: return 33; //yellow for actual keywords
+        case HL_KEYWORD2: return 32; //green for common type names
+        case HL_STRING: return 35; //magenta for strings
+        case HL_NUMBER: return 31; //red for numbers
+        case HL_MATCH: return 34; //blue for successful match in a search
         default: return 37;
     }
+}
+
+/*matching the current filename to one of the filematch fields in HLDB*/
+void editorSelectSyntaxHighlight(){
+    E.syntax = NULL;
+    if(E.filename == "") return;
+
+    int pos = (E.filename.find_last_of('.')); //last occurrence of . in filename
+    string ext = ""; 
+    if(pos != string ::npos) ext = E.filename.substr(pos); //extension of file
+
+    for(unsigned int j=0; j< HLDB_ENTRIES; j++){
+        editorSyntax *s = &HLDB[j];
+        unsigned int i = 0;
+        while(i<s->filematch.size() && s->filematch[i] != ""){//iterate throgh strings in filematch
+            int is_ext = (s->filematch[i][0] == '.');
+            if((is_ext && ext.size() && (ext == s->filematch[i]))|| (!is_ext && (E.filename.find(s->filematch[i])!=string::npos))){
+                E.syntax = s;//if pattern is an extension then we see whether the filename ends with that extension, otherwise we check to see whether the pattern exists anywherre in the filename
+                int filerow;
+                for(filerow=0;filerow<E.numrows;filerow++){
+                    E.hl[filerow]=editorUpdateSyntax(E.render[filerow]);//rehighlighting after the filetype changes
+                }
+                return; 
+            }
+            i++;
+        }
+    }
+
+
 }
 
 /*** row operations ***/
@@ -397,8 +552,15 @@ void editorRowsToString(string &buf){
 
 /*opening and reading a file from disk*/
 void editorOpen(char *filename){
-    ifstream fp(filename);
+    fstream fp;
+    if(filesystem::exists(filename)){
+        fp = fstream(filename);
+    }
+    else fp = fstream(filename, fstream::in | fstream::out | fstream::trunc);
     E.filename = string(filename);
+    
+    editorSelectSyntaxHighlight(); //calling syntaxhighlight when the filename changes
+
     if(fp.fail()) die("fopen"); //open the file given by the user
 
     string line;
@@ -425,6 +587,8 @@ void editorSave(){
             editorSetStatusMessage("Save aborted");
             return;
         }
+        editorSelectSyntaxHighlight(); //calling syntaxhighlight when the filename changes
+
     } 
 
     string buf="";
@@ -451,6 +615,14 @@ void editorSave(){
 void editorFindCallback(char *query, int key){
     static int last_match = -1;
     static int direction = 1; //variable containing direction to search
+
+    static int saved_hl_line; //saving the line which is going to be highlighted
+    static ustring saved_hl = ustring(); //saving the current highlight
+
+    if(saved_hl.size()){
+        E.hl[saved_hl_line]=saved_hl; //restoring the previous highlight
+        saved_hl = ustring();
+    }
     if(key == '\r' || key == '\x1b'){
         last_match = -1;
         direction = 1;
@@ -481,6 +653,12 @@ void editorFindCallback(char *query, int key){
             E.cy = current;
             E.cx =  editorRowRxtoCx(E.row[current],(int)match); //move the cursor to the match
             E.rowoff = E.numrows; //we scroll to the bottom of the file so that in the next refresh the match apears at top.
+            
+            saved_hl_line = current;
+            saved_hl = E.hl[current]; //saving the current line before changing the highlight
+            for(int i=0;i<strlen(query);i++){
+                E.hl[current][match + i] = HL_MATCH;
+            }
             break;
         }
     }
@@ -600,7 +778,16 @@ void editorDrawStatusBar(string &ab){
         status+= E.dirty?"(modified)" : "";
     }
     ab+=status.substr(0,E.screencols); //cut the status string short in case it does not fit inside the width of the window
-    string rstatus=to_string(E.cy+1)+"/"+to_string(E.numrows); //showing current line number
+    string ftype;//filetype information
+    if(!E.syntax){
+        ftype = "no ft";
+    }
+    else
+    {
+        ftype = E.syntax->filetype;
+    }
+    
+    string rstatus= ftype + " | " + to_string(E.cy+1)+"/"+to_string(E.numrows); //showing current line number
     for(int len= min(E.screencols,(int)status.size()); len < E.screencols; len++){
         if(E.screencols - len == rstatus.size()){ //right aligning the current line number
             ab+=rstatus;break;
@@ -828,6 +1015,7 @@ void initEditor(){
     E.filename = "";
     E.statusmsg[0] = '\0';
     E.statusmsg_time = 0;
+    E.syntax = NULL;
 }
 
 int main(int argc, char *argv[]){
