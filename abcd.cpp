@@ -1,8 +1,16 @@
 #include<bits/stdc++.>
 using namespace std;
 int main(){
-string s ="abcdefg\'hgndjfnas\"dvh";//asnasnascnasklcmas/
+string s ="abcdefg\'hgndjfnas\"dvh";//asnasnascnasklcmas/
 int a = char b;
-int a; //checking out cyan comments
+/*checking
+multi 
+line
+comment*/
+/*bool good = true;
+int a; //checking out cyan commentsastest control characters.
 static int d;
 }
+aasas
+*/
+int d;

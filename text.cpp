@@ -46,6 +46,7 @@ enum editorKey{ //mapping of arrow keys
 enum editorHighlight{
     HL_NORMAL = 0,
     HL_COMMENT,
+    HL_MLCOMMENT,
     HL_KEYWORD1,
     HL_KEYWORD2,
     HL_STRING,
@@ -65,12 +66,16 @@ class editorSyntax{
     vector<string> filematch; //list of strings where each string contains a pattern for the filename to match against
     vector<string> keywords; //list of keywords;
     string singleline_comment_start; // single-line comment pattern
+    string multiline_comment_start; //multi-line comment start
+    string multiline_comment_end; //multi-line comment end
     int flags; //bit field which contains flags for whether to highlight numbers and strings.
-    editorSyntax(string filetype, vector<string> filematch, vector<string> keywords, string singleline_comment_start, int flags){
+    editorSyntax(string filetype, vector<string> filematch, vector<string> keywords, string singleline_comment_start, string multiline_comment_start, string multiline_comment_end, int flags){
         this->filetype = filetype;
         this->filematch = filematch;
         this->keywords = keywords;
         this->singleline_comment_start = singleline_comment_start;
+        this->multiline_comment_start = multiline_comment_start;
+        this->multiline_comment_end = multiline_comment_end;
         this->flags = flags;
     }
     
@@ -95,6 +100,8 @@ class editorConfig{
     vector<string> row; //stores the rows of the file
     vector<string> render; //actual characters to print on the screen (for dealing with tabs and non printable characters)
     vector<ustring> hl; //Each value corresponds to a character in render and indicates the type of highlight
+    //vector<int> idx; //
+    vector<int> hl_open_comment;//stores whether the previous line is part of an unclosed multi line comment
     int dirty; //indicates whether the file has unsaved changes or not
     string filename; //filename for displaying in status bar
     char statusmsg[80]; //status message
@@ -120,7 +127,13 @@ vector<string> C_HL_keywords ={
     "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "string|", "vector|", "string|", "set|", "unordered_map|", "unordered_set|", "greater|", "pair|" 
 };//set of keywords and common data types(terminated by a pipe)
 
-vector<editorSyntax> HLDB = {editorSyntax("c",C_HL_extensions,C_HL_keywords,"//",HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS)}; //highlight database
+vector<editorSyntax> HLDB = {
+    editorSyntax(   "c",
+                    C_HL_extensions,
+                    C_HL_keywords,
+                    "//","/*","*/",
+                    HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS)
+}; //highlight database
 
 #define HLDB_ENTRIES HLDB.size()
 
@@ -268,29 +281,62 @@ int is_separator(int c){
 }
 
 /*updating the hl array for highlighting*/
-ustring editorUpdateSyntax(string render){
+ustring editorUpdateSyntax(string render, int idx){
     ustring h = ustring(render.size(),HL_NORMAL);
     if(E.syntax == NULL) return h;
 
     vector<string> keywords = E.syntax->keywords;
 
     string scs = E.syntax->singleline_comment_start;//start of single line comment
+    string mcs = E.syntax->multiline_comment_start;//start of multi line comment
+    string mce = E.syntax->multiline_comment_end;//end of multi line comment
+
     int scs_len = scs.size(); 
+    int mcs_len = mcs.size();
+    int mce_len = mce.size();
 
     int prev_sep = 1; //keeps track of whether the previous character was a separator
     int in_string = 0; //keeps track of whether we are inside a string or not and also stores the beginning quote
-    
+    int in_comment =(idx > 0 && E.hl_open_comment[idx-1]); //keeps track of whether we are inside a multi line comment or not
+
     int i=0;
     while(i<render.size()){
         char c = render[i];
         unsigned char prev_hl = (i>0) ? h[i-1]: HL_NORMAL; //highlight type of the previous character
 
-        if(scs_len && !in_string){
+        if(scs_len && !in_string && !in_comment){
             if(render.substr(i,scs_len)==scs){//if the current charcter is the start of a single line comment
                 for(int j=i;j<=render.size();j++){
                     h[j]=HL_COMMENT; //we set the rest of the line with HL_COMMENT
                 }
                 return h;
+            }
+        }
+
+        if(mcs_len && mce_len && !in_string){
+            if(in_comment){
+                h[i] = HL_MLCOMMENT;
+                if(render.substr(i,mce_len)==mce){
+                    for(int j=i;j<i+mce_len;j++){//if the current character is the end of a multi line comment
+                        h[j]=HL_MLCOMMENT;//we highlight the end string and reset the flag
+                    }
+                    i+= mce_len;
+                    in_comment= 0;
+                    prev_sep = 1;
+                    continue;
+                }
+                else{
+                    i++;
+                    continue;
+                }
+            }
+            else if(render.substr(i,mcs_len)==mcs){//if the current character is the start of a multi line comment
+                    for(int j=i;j<i+mcs_len;j++){
+                        h[j]=HL_MLCOMMENT;//we highlight the start string and set the flag
+                    }
+                    i+= mcs_len;
+                    in_comment= 1;
+                    continue;
             }
         }
 
@@ -354,12 +400,17 @@ ustring editorUpdateSyntax(string render){
         prev_sep = is_separator(c);
         i++;
     }
+    int changed = (E.hl_open_comment[idx]!=in_comment);
+    E.hl_open_comment[idx] = in_comment;
+    if(changed && ((idx + 1) < E.numrows))
+    E.hl[idx+1] = editorUpdateSyntax(E.render[idx+1],idx+1); //if the current multi line comment is not closed we change the highlight of the next line as well
     return h;
 }
 
 int editorSyntaxToColor(int hl){
     switch(hl){
-        case HL_COMMENT: return 36; //cyan for single line comments
+        case HL_COMMENT:
+        case HL_MLCOMMENT: return 36; //cyan for comments
         case HL_KEYWORD1: return 33; //yellow for actual keywords
         case HL_KEYWORD2: return 32; //green for common type names
         case HL_STRING: return 35; //magenta for strings
@@ -387,7 +438,7 @@ void editorSelectSyntaxHighlight(){
                 E.syntax = s;//if pattern is an extension then we see whether the filename ends with that extension, otherwise we check to see whether the pattern exists anywherre in the filename
                 int filerow;
                 for(filerow=0;filerow<E.numrows;filerow++){
-                    E.hl[filerow]=editorUpdateSyntax(E.render[filerow]);//rehighlighting after the filetype changes
+                    E.hl[filerow]=editorUpdateSyntax(E.render[filerow],filerow);//rehighlighting after the filetype changes
                 }
                 return; 
             }
@@ -448,13 +499,15 @@ void editorInsertRow(int at, string s, int len){
     if(at == E.row.size()){
         E.row.push_back(s.substr(0,len)); 
         E.render.push_back(editorUpdateRow(s.substr(0,len)));
-        E.hl.push_back(editorUpdateSyntax(E.render.back()));
+        E.hl_open_comment.push_back(0);
+        E.hl.push_back(editorUpdateSyntax(E.render.back(),E.render.size()-1));
     }
     else{
         E.row.insert(E.row.begin()+at,s.substr(0,len));
         string r = editorUpdateRow(s.substr(0,len)); 
         E.render.insert(E.render.begin()+at,r);
-        E.hl.insert(E.hl.begin()+at,editorUpdateSyntax(r));
+        E.hl_open_comment.insert(E.hl_open_comment.begin()+at,0);
+        E.hl.insert(E.hl.begin()+at,editorUpdateSyntax(r,at));
     }
     E.numrows++;
     E.dirty++;
@@ -465,6 +518,7 @@ void editorDelRow(int at){
     if(at < 0 || at >= E.numrows) return;
     E.row.erase(E.row.begin()+at);
     E.render.erase(E.render.begin()+at);
+    E.hl_open_comment.erase(E.hl_open_comment.begin()+at);
     E.numrows--;
     E.dirty++;
 }
@@ -476,7 +530,7 @@ void editorRowInsertChar(string &row, int at, char c, int pos){
     }
     row.insert(row.begin()+at,c);
     E.render[pos] = editorUpdateRow(row);
-    E.hl[pos] = editorUpdateSyntax(E.render[pos]);
+    E.hl[pos] = editorUpdateSyntax(E.render[pos],pos);
     E.dirty++;
 }
 
@@ -484,7 +538,7 @@ void editorRowInsertChar(string &row, int at, char c, int pos){
 void editorRowAppendString(string &row, string to_append, int pos){
     row+=to_append;
     E.render[pos] = editorUpdateRow(row);
-    E.hl[pos] = editorUpdateSyntax(E.render[pos]);
+    E.hl[pos] = editorUpdateSyntax(E.render[pos], pos);
     E.dirty++;
 }
 
@@ -493,7 +547,7 @@ void editorRowDelChar(string &row, int at, int pos){
     if(at < 0 || at >= row.size()) return;
     row.erase(row.begin()+at);
     E.render[pos] = editorUpdateRow(row);
-    E.hl[pos] = editorUpdateSyntax(E.render[pos]);
+    E.hl[pos] = editorUpdateSyntax(E.render[pos],pos);
     E.dirty++;
 }
 
@@ -519,7 +573,7 @@ void editorInsertNewline(){
         E.row[E.cy].erase(E.cx); //We truncate the current row;
         row = E.row[E.cy];
         E.render[E.cy]= editorUpdateRow(row);
-        E.hl[E.cy]=editorUpdateSyntax(E.render[E.cy]);
+        E.hl[E.cy]=editorUpdateSyntax(E.render[E.cy],E.cy);
     }
     E.cy++;
     E.cx=0;
@@ -742,7 +796,16 @@ void editorDrawRows(string &ab){
             int current_color = -1;
             int j;
             for(j=0;j<len && s.size();j++){
-                if(h[j] == HL_NORMAL){
+                if(iscntrl(s[j])){
+                    char sym = (s[j]<=26)?'@'+s[j]:'?'; //render Ctrl-'X' as 'X' and other nonprintable characters as '?'
+                    ab+="\x1b[7m";//switch to inverted colours
+                    ab+=sym;
+                    ab+="\x1b[m";//turn off inverted colours
+                    if(current_color!=-1){
+                        ab+="\x1b["+to_string(current_color)+"m"; //change to the required color
+                    }
+                }
+                else if(h[j] == HL_NORMAL){
                     if(current_color!=-1){
                         ab+="\x1b[39m"; //redering normal characters in default color.
                         current_color=-1;
@@ -1010,6 +1073,7 @@ void initEditor(){
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.row = vector<string>();
     E.render = vector<string>();
+    E.hl_open_comment = vector<int>();
     E.dirty = 0;
     E.screenrows -=2;
     E.filename = "";
