@@ -81,12 +81,6 @@ class editorSyntax{
     
 };
 
-/* data type for storing  a row of text */
-typedef class erow{
-    int size;
-    char *chars;
-} erow;
-
 /*editor configuration */
 class editorConfig{
     public:
