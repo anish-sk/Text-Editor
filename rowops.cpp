@@ -117,7 +117,7 @@ void editorInsertChar(char c){
 /* insert newline when Enter key is pressed*/
 void editorInsertNewline(){
     if(E.cx == 0){
-        editorInsertRow(E.cy,"",0);//If we are at the beginnig of a line , we just need to insert a blank row above
+        editorInsertRow(E.cy,"",0);//If we are at the beginning of a line , we just need to insert a blank row above
     }
     else{
         string row = E.row[E.cy];
