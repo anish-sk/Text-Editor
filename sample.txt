@@ -1,46 +1,49 @@
-One solution to this problem is to use machine learning to discover not only
-the mapping from representation to output but also the representation itself.
-This approach is known as representation learning . Learned representations
-often result in much better performance than can be obtained with hand-designed
-representations. They also enable AI systems to rapidly adapt to new tasks, with
-minimal human intervention. A representation learning algorithm can discover a
-good set of features for a simple task in minutes, or for a complex task in hours to
-months. Manually designing features for a complex task requires a great deal of
-human time and effort; it can take decades for an entire community of researchers.
-The quintessential example of a representation learning algorithm is the au-
-toencoder . An autoencoder is the combination of an encoder function, which
-converts the input data into a different representation, and a decoder function,
-which converts the new representation back into the original format. Autoencoders
-are trained to preserve as much information as possible when an input is run
-through the encoder and then the decoder, but they are also trained to make the
-new representation have various nice properties. Different kinds of autoencoders
-aim to achieve different kinds of properties.
+One solution to this problem is to use machine learning to discover not only the mapping from representation to output but also the representation itself. 
+This approach is known as representation learning . Learned representations often result in much better performance than can be obtained with hand-designed 
+representations. They also enable AI systems to rapidly adapt to new tasks, with minimal human intervention. A representation learning algorithm can discover 
+a good set of features for a simple task in minutes, or for a complex task in hours to months. This is a very great achievement. Manually designing features 
+for a complex task requires a great deal of human time and effort. It can take decades for an entire community of researchers. The quintessential example 
+of a representation learning algorithm is the autoencoder . An autoencoder is the combination of an encoder function, which converts the input data into a 
+different representation, and a decoder function, which converts the new representation back into the original format. 
 
-When designing features or algorithms for learning features, our goal is usually
-to separate the factors of variation that explain the observed data. In this
-context, we use the word "factors" simply to refer to separate sources of influence;
-the factors are usually not combined by multiplication. Such factors are often not
-quantities that are directly observed. Instead, they may exist as either unobserved
-objects or unobserved forces in the physical world that affect observable quantities.
-They may also exist as constructs in the human mind that provide useful simplifying
-explanations or inferred causes of the observed data. They can be thought of as
-concepts or abstractions that help us make sense of the rich variability in the data.
-When analyzing a speech recording, the factors of variation include the speaker’s
-age, their sex, their accent and the words they are speaking. When analyzing an
-image of a car, the factors of variation include the position of the car, its color,
-and the angle and brightness of the sun.
-A major source of difficulty in many real-world artificial intelligence applications
-is that many of the factors of variation influence every single piece of data we are
-able to observe. The individual pixels in an image of a red car might be very close
-to black at night. The shape of the car's silhouette depends on the viewing angle.
-Most applications require us to disentangle the factors of variation and discard the
-ones that we do not care about.
+Autoencoders are trained to preserve as much information as possible when an input is run through the encoder and then the decoder, but they are also trained to make the new 
+representation have various nice properties. Different kinds of autoencoders aim to achieve different kinds of properties.Deep learning helps to 
+generalize from smaller 
+number of training examples. When designing features or algorithms for learning features, our goal is usually to separate the factors of variation that explain the observed data. 
+In this context, we use the word "factors" simply to refer to separate sources of influence; the factors are usually not combined by multiplication. Such factors are often not 
+quantities that are directly observed. Instead, they may exist as either unobserved objects or unobserved forces in the physical world that affect observable quantities. 
+They may also exist as constructs in the human mind that provide useful simplifying explanations or inferred causes of the observed data. 
 
-Of course, it can be very difficult to extract such high-level, abstract features
-from raw data. Many of these factors of variation, such as a speaker's accent,
-can be identified only using sophisticated, nearly human-level understanding of
-the data. When it is nearly as difficult to obtain a representation as to solve the
-original problem, representation learning does not, at first glance, seem to help us.
-Deep learning solves this central problem in representation learning by intro-
-ducing representations that are expressed in terms of other, simpler representations.
+They can be thought of as concepts or abstractions that help us make sense of the rich variability in the data.
+
+
+When analyzing a speech recording, the factors of variation include the speaker’s age, their sex, their accent and the words they are speaking.
+
+
+When analyzing an image of a car, the factors of variation include the position of the car, its color, and the angle and brightness of the sun. 
+
+
+A major source of difficulty in many real-world artificial intelligence applications is that many of the factors of variation influence every single piece of 
+data we are able to observe. 
+
+
+The individual pixels in an image of a red car might be very close to black at night. 
+
+
+The shape of the car's silhouette depends on the viewing angle. 
+
+
+Most applications require us to disentangle the factors of variation and discard the ones that we do not care about. 
+
+
+Of course, it can be very difficult to extract such high-level, abstract features from raw data.
+ 
+
+Many of these factors of variation, such as a speaker's accent, can be identified only using sophisticated, nearly human-level understanding of the data. 
+
+
+When it is nearly as difficult to obtain a representation as to solve the original problem, representation learning does not, at first glance, seem to help us. 
+
+
+Deep learning solves this central problem in representation learning by introducing representations that are expressed in terms of other, simpler representations.
 
